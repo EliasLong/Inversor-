@@ -1,0 +1,32 @@
+# Dependencias
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Entorno
+.env
+*.env.local
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# DB y modelos entrenados
+ml/models/*.pkl
+ml/models/*.joblib
+ml/data/raw/*.csv
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
