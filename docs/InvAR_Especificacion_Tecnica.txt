@@ -1,0 +1,448 @@
+InvAR
+Especificación Técnica — Plataforma de Inversiones Argentina
+Dataset histórico · Modelo ML político-financiero · Arquitectura de datos
+Versión 1.0 · Abril 2026
+1. Contexto y objetivo
+InvAR es una plataforma personal de análisis de inversiones para el mercado argentino. Su diferencial es un modelo de predicción que cruza señales del mundo político con movimientos de precios en BYMA, anticipando movimientos antes de que aparezcan en los datos financieros tradicionales.
+FUNDAMENTO  
+Argentina opera bajo una lógica donde los eventos políticos preceden a los movimientos financieros. Un decreto del ENRE sobre tarifas impacta en PAMP y CEPU antes de que cualquier analista lo refleje en un precio objetivo.
+2. Regímenes políticos y estrategia de dataset
+Argentina atravesó una ruptura estructural en diciembre 2023. El modelo de correlación evento-precio se invirtió en múltiples sectores. Por eso el dataset se divide en capas con pesos diferenciados.
+2.1 Mapa de regímenes y pesos de entrenamiento
+Período
+Régimen
+Duración
+Peso ML
+Uso
+Jul 2024 → hoy
+Libertario consolidado
+~21 meses
+1.0 (base)
+Entrenamiento principal
+Dic 2023 → Jun 2024
+Libertario shock
+~6 meses
+0.6
+Shocks de desregulación
+Ago 2023 → Nov 2023
+Transición electoral
+~4 meses
+0.4 (flag)
+Reacción a expectativas
+Ene 2020 → Jul 2023
+Kirchnerismo (Alberto)
+~3.5 años
+0.0 (contraste)
+Solo contraste de régimen
+ADVERTENCIA  
+NO usar datos del kirchnerismo como base de entrenamiento. La relación evento-precio era opuesta: congelamiento de tarifas hacía subir a distribuidoras, acuerdo FMI hacía bajar bancos. Usarlos directamente confunde al modelo.
+2.2 Volumen estimado de eventos por período
+El dataset objetivo es de 600 a 900 eventos etiquetados para el entrenamiento inicial:
+Fase consolidada (peso 1.0): ~400–500 eventos · fuente principal
+Fase shock (peso 0.6): ~100–150 eventos · decretos y resoluciones grandes
+Transición electoral (peso 0.4): ~50–80 eventos · solo electorales y macro
+3. Estructura de base de datos — PostgreSQL
+Todas las tablas viven en la base invar en PostgreSQL 15+. El esquema usa TIMESTAMPTZ para todos los timestamps (zona horaria America/Argentina/Buenos_Aires implícita en la app pero almacenada en UTC).
+3.1 Tabla: eventos_politicos
+Núcleo del dataset histórico. Cada fila es un evento del mundo político con su clasificación y fuente.
+Columna
+Tipo
+Requerido
+Descripción
+id
+BIGSERIAL PK
+auto
+Identificador único autoincremenental
+fecha_evento
+TIMESTAMPTZ
+SÍ
+Momento exacto del evento (publicación o declaración)
+titulo
+VARCHAR(500)
+SÍ
+Título o resumen corto del evento (máx 500 chars)
+texto_completo
+TEXT
+NO
+Cuerpo completo del comunicado, nota o resolución
+fuente
+VARCHAR(100)
+SÍ
+ej: ENRE, BCRA, twitter_oficial, infobae, ambito
+url
+VARCHAR(1000)
+NO
+URL de la fuente original para trazabilidad
+tipo_evento
+VARCHAR(30)
+SÍ
+decreto | resolucion | declaracion | licitacion | dato_macro | electoral | encuesta
+sector
+VARCHAR(30)
+SÍ
+energia | bancario | agro | construccion | macro | electoral | otro
+sentiment_score
+NUMERIC(4,3)
+SÍ
+De -1.000 (muy negativo) a +1.000 (muy positivo) por sector
+sentiment_fuente
+VARCHAR(20)
+SÍ
+claude_api | manual | hybrid
+regimen_politico
+VARCHAR(30)
+SÍ
+libertario_consolidado | libertario_shock | transicion | kirchnerismo
+peso_entrenamiento
+NUMERIC(3,2)
+SÍ
+Factor de peso: 1.0, 0.6, 0.4 o 0.0 según régimen
+tickers_afectados
+VARCHAR(20)[]
+NO
+Array de tickers relacionados. ej: {PAMP,CEPU,TGNO4}
+verificado
+BOOLEAN
+SÍ
+true si fue revisado manualmente. Default FALSE
+creado_en
+TIMESTAMPTZ
+auto
+Timestamp de inserción. Default NOW()
+SQL de creación — eventos_politicos
+CREATE TABLE eventos_politicos (
+  id                BIGSERIAL PRIMARY KEY,
+  fecha_evento      TIMESTAMPTZ NOT NULL,
+  titulo            VARCHAR(500) NOT NULL,
+  texto_completo    TEXT,
+  fuente            VARCHAR(100) NOT NULL,
+  url               VARCHAR(1000),
+  tipo_evento       VARCHAR(30) NOT NULL,
+  sector            VARCHAR(30) NOT NULL,
+  sentiment_score   NUMERIC(4,3) NOT NULL CHECK (sentiment_score BETWEEN -1 AND 1),
+  sentiment_fuente  VARCHAR(20) NOT NULL DEFAULT 'claude_api',
+  regimen_politico  VARCHAR(30) NOT NULL,
+  peso_entrenamiento NUMERIC(3,2) NOT NULL DEFAULT 1.0,
+  tickers_afectados VARCHAR(20)[],
+  verificado        BOOLEAN NOT NULL DEFAULT FALSE,
+  creado_en         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- Índices principales
+CREATE INDEX idx_ep_fecha    ON eventos_politicos (fecha_evento DESC);
+CREATE INDEX idx_ep_sector   ON eventos_politicos (sector, fecha_evento DESC);
+CREATE INDEX idx_ep_regimen  ON eventos_politicos (regimen_politico);
+CREATE INDEX idx_ep_tipo     ON eventos_politicos (tipo_evento);
+CREATE INDEX idx_ep_verif    ON eventos_politicos (verificado) WHERE verificado = FALSE;
+3.2 Tabla: impacto_precios
+Cruza cada evento político con el movimiento de precio de cada ticker afectado. Esta tabla es la variable objetivo del modelo ML.
+Columna
+Tipo
+Requerido
+Descripción
+id
+BIGSERIAL PK
+auto
+Identificador único
+evento_id
+BIGINT FK
+SÍ
+Referencia a eventos_politicos.id
+ticker
+VARCHAR(20)
+SÍ
+ej: PAMP, GGAL, CEPU, AL30
+precio_t0
+NUMERIC(18,4)
+SÍ
+Precio al momento del evento (cierre anterior o apertura)
+precio_t24
+NUMERIC(18,4)
+NO
+Precio 24 horas después del evento
+precio_t48
+NUMERIC(18,4)
+NO
+Precio 48 horas después del evento
+precio_t72
+NUMERIC(18,4)
+NO
+Precio 72 horas después del evento
+var_pct_24h
+NUMERIC(8,4)
+NO
+Variación % entre t0 y t24. Calculado automáticamente
+var_pct_48h
+NUMERIC(8,4)
+NO
+Variación % entre t0 y t48. Variable objetivo principal
+var_pct_72h
+NUMERIC(8,4)
+NO
+Variación % entre t0 y t72
+etiqueta
+VARCHAR(10)
+NO
+SUBE | BAJA | NEUTRO. Calculado: >2% SUBE, <-2% BAJA
+merval_var_48h
+NUMERIC(8,4)
+NO
+Variación del Merval en mismo período (control)
+creado_en
+TIMESTAMPTZ
+auto
+Default NOW()
+CREATE TABLE impacto_precios (
+  id              BIGSERIAL PRIMARY KEY,
+  evento_id       BIGINT NOT NULL REFERENCES eventos_politicos(id),
+  ticker          VARCHAR(20) NOT NULL,
+  precio_t0       NUMERIC(18,4) NOT NULL,
+  precio_t24      NUMERIC(18,4),
+  precio_t48      NUMERIC(18,4),
+  precio_t72      NUMERIC(18,4),
+  var_pct_24h     NUMERIC(8,4) GENERATED ALWAYS AS
+    (ROUND((precio_t24 - precio_t0) / precio_t0 * 100, 4)) STORED,
+  var_pct_48h     NUMERIC(8,4) GENERATED ALWAYS AS
+    (ROUND((precio_t48 - precio_t0) / precio_t0 * 100, 4)) STORED,
+  var_pct_72h     NUMERIC(8,4) GENERATED ALWAYS AS
+    (ROUND((precio_t72 - precio_t0) / precio_t0 * 100, 4)) STORED,
+  etiqueta        VARCHAR(10) GENERATED ALWAYS AS (
+    CASE WHEN (precio_t48-precio_t0)/precio_t0*100 > 2  THEN 'SUBE'
+         WHEN (precio_t48-precio_t0)/precio_t0*100 < -2 THEN 'BAJA'
+         ELSE 'NEUTRO' END) STORED,
+  merval_var_48h  NUMERIC(8,4),
+  creado_en       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(evento_id, ticker)
+);
+NOTA ML  
+var_pct_48h es la variable objetivo del modelo: lo que el ML aprende a predecir. etiqueta es la versión categorizada (SUBE/BAJA/NEUTRO) para clasificación binaria.
+3.3 Tabla: predicciones_ml
+Almacena cada predicción generada por el modelo para hacer tracking de aciertos y reentrenar.
+Columna
+Tipo
+Requerido
+Descripción
+id
+BIGSERIAL PK
+auto
+Identificador único
+evento_id
+BIGINT FK
+SÍ
+Evento político que disparó la predicción
+ticker
+VARCHAR(20)
+SÍ
+Ticker sobre el que se predice
+prob_sube
+NUMERIC(5,4)
+SÍ
+Probabilidad de suba >2% en 48h. Ej: 0.7300
+prob_baja
+NUMERIC(5,4)
+SÍ
+Probabilidad de baja >2% en 48h
+prob_neutro
+NUMERIC(5,4)
+SÍ
+Probabilidad de movimiento neutro
+señal
+VARCHAR(10)
+SÍ
+SUBE | BAJA | NEUTRO — clase con mayor probabilidad
+confianza
+NUMERIC(5,4)
+SÍ
+max(prob_sube, prob_baja, prob_neutro)
+modelo_version
+VARCHAR(20)
+SÍ
+ej: v1.0.0, v1.2.3 — para comparar versiones
+features_json
+JSONB
+NO
+Snapshot de los features usados para auditabilidad
+resultado_real
+VARCHAR(10)
+NO
+Se completa a t+48h: SUBE | BAJA | NEUTRO
+acerto
+BOOLEAN
+NO
+señal = resultado_real. Calculado al completar resultado
+generada_en
+TIMESTAMPTZ
+auto
+Momento de generación de la predicción
+3.4 Tablas de soporte (ya existentes)
+Las siguientes tablas ya están definidas en el esquema principal de InvAR y se referencian desde el modelo político:
+cotizaciones — historial de precios por ticker (fuente para poblar impacto_precios)
+señales — señales financieras generadas por Claude API
+noticias — feed de noticias scrapeadas
+portafolio — posiciones del usuario
+4. Features del modelo ML
+El modelo recibe estos features para generar cada predicción. Todos se calculan en tiempo de inferencia a partir de la DB.
+Feature
+Tipo
+Peso aprox.
+Cómo se calcula
+sentiment_score
+float [-1,1]
+35%
+Claude API analiza texto del evento y devuelve score por sector
+tipo_evento_encoded
+int [0-6]
+25%
+decreto=6, resolucion=5, declaracion=3, licitacion=4, dato_macro=2, electoral=5, encuesta=2
+riesgo_pais_t0
+float
+10%
+Valor del EMBI Argentina al momento del evento (tabla cotizaciones)
+tipo_cambio_brecha
+float
+10%
+(CCL - oficial) / oficial · brecha cambiaria al momento
+ticker_vol_30d
+float
+8%
+Desvío estándar del ticker en los 30 días anteriores al evento
+merval_tendencia_5d
+float
+5%
+Variación % del Merval en los 5 días previos al evento
+hora_evento
+int [0-23]
+4%
+Hora local del evento (eventos post-cierre tienen distinto impacto)
+fuente_score
+int [1-5]
+3%
+ENRE/BCRA=5, BOE=4, twitter_oficial=3, periodista=2, encuesta=1
+5. Flujo de ingesta y etiquetado
+5.1 Pipeline de un nuevo evento en tiempo real
+1. 
+Scraper detecta nuevo evento en fuente (ENRE, BCRA, Twitter oficial, BOE)
+2. 
+Node.js inserta fila en eventos_politicos con verificado = FALSE
+3. 
+Job llama a Claude API: extrae sector, tipo y sentiment_score
+4. 
+Se actualizan los campos clasificados. Queda pendiente verificación manual
+5. 
+A t+48h, job automático busca el precio del ticker en cotizaciones y completa impacto_precios
+6. 
+Si existe predicción activa, se completa resultado_real y acerto
+7. 
+Registro disponible para próximo ciclo de reentrenamiento
+5.2 Pipeline del dataset histórico (etiquetado manual inicial)
+Para construir el dataset base de jul 2024 → abr 2026 se necesita:
+Exportar archivo CSV de noticias históricas desde Ámbito, Infobae y fuentes oficiales
+Correr script Python que llama a Claude API en batch para pre-clasificar sector y sentiment
+Revisor humano valida y corrige en interfaz web simple (campo verificado = TRUE)
+Script cruza automáticamente con histórico de precios de BYMA para poblar impacto_precios
+Dataset listo para entrenamiento con scikit-learn (Random Forest o XGBoost)
+ESTIMACIÓN  
+Se estima 3–4 horas de revisión manual para verificar ~500 eventos pre-clasificados por Claude API. La precisión de Claude en clasificación de sector es ~92% en pruebas iniciales, reduciendo el trabajo manual al ~8% de correcciones.
+6. Mapa sectorial — eventos por sector y tickers
+Sector (DB)
+Tickers principales
+Fuentes a monitorear
+Tipos de evento relevantes
+energia
+PAMP, CEPU, YPF, TGNO4, TGSU2
+ENRE, ENARGAS, SecEnergía
+decreto, resolucion (tarifas, concesiones, Vaca Muerta)
+bancario
+GGAL, BMA, SUPV, BBAR, FRANSF
+BCRA, Mecon, FMI
+declaracion, dato_macro (tasas, FMI, riesgo país)
+agro
+CRES, AGRO, MOLI
+AFIP, CIARA, SAGyP
+decreto (retenciones, dólar soja), dato_macro (INDEC)
+construccion
+LOMA, HARG, COME
+Contrataciones.gob, MOP
+licitacion (PPP, obra pública), dato_macro (ISAC)
+macro
+AL30, GD35, GD41 (bonos)
+BCRA, INDEC, FMI, Mecon
+dato_macro (IPC, reservas, fiscal), declaracion ministro
+electoral
+Merval general, bonos
+DINE, encuestadoras, Twitter
+electoral (resultados), encuesta (intención de voto)
+7. Convenciones y valores permitidos
+tipo_evento — valores permitidos
+Valor
+Descripción y ejemplos
+decreto
+Decreto del Poder Ejecutivo Nacional. DNU 70/2023, decreto de emergencia
+resolucion
+Resolución de organismo regulador. Resolución ENRE 123/2024, ENARGAS 45/2025
+declaracion
+Declaración pública de funcionario. Conferencia de prensa ministro, tweet oficial
+licitacion
+Llamado a licitación pública. Publicación en Contrataciones.gob.ar, BOE
+dato_macro
+Publicación de dato económico. IPC INDEC, reservas BCRA, resultado fiscal
+electoral
+Resultado electoral. PASO, primera vuelta, ballotage, elecciones legislativas
+encuesta
+Publicación de encuesta política o económica. Intención de voto, confianza del consumidor
+regimen_politico — valores permitidos
+libertario_consolidado — Jul 2024 a hoy · peso 1.0
+libertario_shock — Dic 2023 a Jun 2024 · peso 0.6
+transicion — Ago 2023 a Nov 2023 · peso 0.4
+kirchnerismo — Ene 2020 a Jul 2023 · peso 0.0
+8. Checklist de implementación para Antigravity
+INSTRUCCIÓN  
+Este checklist define el orden de construcción recomendado. Cada ítem es independiente y puede asignarse a un agente distinto.
+Fase 1 — Base de datos (prioridad máxima)
+Crear base de datos invar en PostgreSQL 15
+Ejecutar schema.sql existente (cotizaciones, señales, noticias, portafolio)
+Crear tabla eventos_politicos con todos los campos e índices del §3.1
+Crear tabla impacto_precios con columnas generadas del §3.2
+Crear tabla predicciones_ml del §3.3
+Verificar constraints: CHECK en sentiment_score, UNIQUE en impacto_precios(evento_id, ticker)
+Fase 2 — Ingesta histórica
+Script Python: leer CSV de noticias históricas jul 2024 → abr 2026
+Llamada batch a Claude API para clasificar sector, tipo y sentiment de cada fila
+Insertar resultados en eventos_politicos con verificado = FALSE
+Script de cruce: para cada evento con tickers_afectados, buscar precio en cotizaciones y poblar impacto_precios
+Interfaz de revisión manual: listar eventos con verificado = FALSE, formulario de corrección
+Fase 3 — Modelo ML
+Script Python: exportar dataset de entrenamiento desde vista ml_dataset (eventos + impacto con peso)
+Entrenar Random Forest con scikit-learn usando features del §4
+Serializar modelo con joblib (modelo_v1.pkl)
+Endpoint Node.js POST /api/predict: recibe evento nuevo, llama a Python via child_process, devuelve predicción
+Job cron: a t+48h busca resultado real, completa impacto_precios y predicciones_ml
+Fase 4 — Frontend
+Columna nueva en módulo Análisis: "Señal política" con prob % y ventana temporal
+Panel de predicciones activas: ticker, señal, confianza, tiempo restante hasta vencimiento
+Historial de aciertos por sector y modelo_version
+9. Vista auxiliar: ml_dataset
+Esta vista facilita la exportación del dataset para entrenamiento sin joins manuales:
+CREATE OR REPLACE VIEW ml_dataset AS
+SELECT
+  ep.id,
+  ep.fecha_evento,
+  ep.tipo_evento,
+  ep.sector,
+  ep.sentiment_score,
+  ep.regimen_politico,
+  ep.peso_entrenamiento,
+  EXTRACT(HOUR FROM ep.fecha_evento) AS hora_evento,
+  ep.fuente,
+  ip.ticker,
+  ip.precio_t0,
+  ip.var_pct_24h,
+  ip.var_pct_48h,
+  ip.var_pct_72h,
+  ip.etiqueta,
+  ip.merval_var_48h
+FROM eventos_politicos ep
+JOIN impacto_precios ip ON ip.evento_id = ep.id
+WHERE ep.verificado = TRUE
+  AND ep.peso_entrenamiento > 0
+ORDER BY ep.fecha_evento DESC;
+InvAR · Especificación Técnica v1.0 · Abril 2026
