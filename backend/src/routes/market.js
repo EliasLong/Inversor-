@@ -1,0 +1,16 @@
+import express from 'express';
+import { getMarketData } from '../scrapers/ambito.js';
+
+const router = express.Router();
+
+router.get('/dolar', async (req, res) => {
+  try {
+    const data = await getMarketData();
+    res.json(data);
+  } catch (error) {
+    console.error('Error en GET /api/market/dolar:', error);
+    res.status(500).json({ error: 'Error al obtener datos del mercado' });
+  }
+});
+
+export default router;
