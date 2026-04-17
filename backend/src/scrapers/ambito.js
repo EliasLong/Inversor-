@@ -14,21 +14,22 @@ export async function getMarketData() {
 
     const [mepResponse, riesgoResponse] = await Promise.all([
       fetch('https://mercados.ambito.com/dolar/mep/variacion', { headers }),
-      fetch('https://mercados.ambito.com/riesgo-pais/variacion', { headers })
+      fetch('https://api.argentinadatos.com/v1/finanzas/indices/riesgo-pais')
     ]);
 
     console.log('MEP status:', mepResponse.status);
     console.log('Riesgo status:', riesgoResponse.status);
 
-    if (mepResponse.status === 403 || riesgoResponse.status === 403) {
+    if (mepResponse.status === 403) {
       return {
         mep: { precio: 'No disponible', variacion: '-' },
-        riesgoPais: { valor: 'No disponible', variacion: '-' }
+        riesgoPais: { valor: 'No disponible', fecha: '-' }
       };
     }
 
     const mepData = await mepResponse.json();
     const riesgoData = await riesgoResponse.json();
+    const ultimoRiesgo = riesgoData[riesgoData.length - 1];
 
     return {
       mep: {
@@ -36,8 +37,8 @@ export async function getMarketData() {
         variacion: mepData.variacion
       },
       riesgoPais: {
-        valor: riesgoData.valor,
-        variacion: riesgoData.variacion
+        valor: ultimoRiesgo.valor,
+        fecha: ultimoRiesgo.fecha
       }
     };
   } catch (error) {
