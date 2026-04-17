@@ -5,7 +5,11 @@ export async function getMarketData() {
       'Accept': 'application/json, text/plain, */*',
       'Accept-Language': 'es-AR,es;q=0.9',
       'Referer': 'https://www.ambito.com/',
-      'Origin': 'https://www.ambito.com'
+      'Origin': 'https://www.ambito.com',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'sec-fetch-site': 'same-origin',
+      'sec-fetch-mode': 'cors'
     };
 
     const [mepResponse, riesgoResponse] = await Promise.all([
@@ -13,8 +17,14 @@ export async function getMarketData() {
       fetch('https://mercados.ambito.com/riesgo/variacion', { headers })
     ]);
 
-    if (!mepResponse.ok || !riesgoResponse.ok) {
-      throw new Error('Error al consumir la API de Ámbito');
+    console.log('MEP status:', mepResponse.status);
+    console.log('Riesgo status:', riesgoResponse.status);
+
+    if (mepResponse.status === 403 || riesgoResponse.status === 403) {
+      return {
+        mep: { precio: 'No disponible', variacion: '-' },
+        riesgoPais: { valor: 'No disponible', variacion: '-' }
+      };
     }
 
     const mepData = await mepResponse.json();
