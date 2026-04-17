@@ -14,7 +14,7 @@ export async function getMarketData() {
 
     const [mepResponse, riesgoResponse] = await Promise.all([
       fetch('https://mercados.ambito.com/dolar/mep/variacion', { headers }),
-      fetch('https://mercados.ambito.com/riesgo/variacion', { headers })
+      fetch('https://mercados.ambito.com/riesgo-pais/variacion', { headers })
     ]);
 
     console.log('MEP status:', mepResponse.status);
