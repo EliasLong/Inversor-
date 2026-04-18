@@ -4,6 +4,8 @@ export default function Dashboard() {
   const [loadingHealth, setLoadingHealth] = useState(true);
   const [marketData, setMarketData] = useState(null);
   const [loadingMarket, setLoadingMarket] = useState(true);
+  const [mervalData, setMervalData] = useState(null);
+  const [loadingMerval, setLoadingMerval] = useState(true);
   useEffect(() => {
     const API_URL = import.meta.env.VITE_API_URL || 'https://inversor-production.up.railway.app';
     fetch(`${API_URL}/api/health`)
@@ -26,6 +28,16 @@ export default function Dashboard() {
       .catch(error => {
         console.error('Error al obtener datos de mercado:', error);
         setLoadingMarket(false);
+      });
+    fetch(`${API_URL}/api/market/merval`)
+      .then(res => res.json())
+      .then(data => {
+        setMervalData(data);
+        setLoadingMerval(false);
+      })
+      .catch(error => {
+        console.error('Error al obtener datos del Merval:', error);
+        setLoadingMerval(false);
       });
   }, []);
 
@@ -62,7 +74,16 @@ export default function Dashboard() {
       <div style={styles.grid}>
         <div style={styles.card}>
           <h3 style={styles.metricTitle}>Merval</h3>
-          <p style={styles.metricValue}>1.250.000 pts</p>
+          {loadingMerval ? (
+            <p style={styles.metricValue}>Cargando...</p>
+          ) : (
+            <>
+              <p style={styles.metricValue}>{mervalData?.valor?.toLocaleString?.('es-AR') || mervalData?.valor || '-'} pts</p>
+              <p style={{ ...styles.variacion, color: variacionColor(mervalData?.variacion) }}>
+                {mervalData?.variacion || '-'}
+              </p>
+            </>
+          )}
         </div>
         <div style={styles.card}>
           <h3 style={styles.metricTitle}>Dólar MEP</h3>
